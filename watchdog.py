@@ -18,12 +18,25 @@ from claude_agent_sdk import query, ClaudeAgentOptions, tool
 DEFAULT_CONFIG = {
     "check_interval": 30,  # seconds between health checks
     "max_simple_restarts": 3,  # attempts before invoking AI agent
+    "update_check_interval": 14400,  # 4 hours in seconds
     "services": {
         # Example service configuration
         # "my_service": {
         #     "launchd_label": "com.example.my-service",
         #     "port": 8080,
         #     "log_file": "/var/log/my-service.log"
+        # }
+    },
+    "repositories": {
+        # Example repository configuration for auto-updates
+        # "clawdbot": {
+        #     "path": "/Users/username/workspace/clawdbot",
+        #     "branch": "main",
+        #     "post_update_commands": [
+        #         "pnpm install",
+        #         "pnpm build"
+        #     ],
+        #     "restart_services": ["com.clawdbot.gateway"]
         # }
     }
 }
@@ -80,6 +93,98 @@ async def send_telegram_tool(inputs: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {
             "content": f"Error sending telegram: {e}",
+            "is_error": True
+        }
+
+
+@tool(
+    name="check_git_updates",
+    description="Check if a git repository has new commits available",
+    input_schema={"repo_name": str}
+)
+async def check_git_updates_tool(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Check if repository has updates"""
+    repo_name = inputs["repo_name"]
+    repositories = CONFIG.get("repositories", {})
+    
+    if repo_name not in repositories:
+        return {
+            "content": f"Unknown repository: {repo_name}. Available: {list(repositories.keys())}",
+            "is_error": True
+        }
+    
+    repo = repositories[repo_name]
+    repo_path = Path(repo["path"])
+    
+    if not repo_path.exists():
+        return {
+            "content": f"Repository path does not exist: {repo_path}",
+            "is_error": True
+        }
+    
+    try:
+        # Fetch latest
+        subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=repo_path,
+            capture_output=True,
+            check=True
+        )
+        
+        # Get current branch
+        current_branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        current_branch = current_branch_result.stdout.strip()
+        
+        # Get commit info
+        local_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        ).stdout.strip()
+        
+        remote_commit = subprocess.run(
+            ["git", "rev-parse", f"origin/{repo.get('branch', 'main')}"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        ).stdout.strip()
+        
+        has_updates = local_commit != remote_commit
+        
+        # Get new commits if available
+        new_commits = ""
+        if has_updates:
+            commits_result = subprocess.run(
+                ["git", "log", "--oneline", f"{local_commit}..{remote_commit}"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True
+            )
+            new_commits = commits_result.stdout.strip()
+        
+        return {
+            "content": json.dumps({
+                "repo_name": repo_name,
+                "path": str(repo_path),
+                "current_branch": current_branch,
+                "has_updates": has_updates,
+                "local_commit": local_commit[:7],
+                "remote_commit": remote_commit[:7],
+                "new_commits": new_commits
+            }, indent=2)
+        }
+    except Exception as e:
+        return {
+            "content": f"Error checking for updates: {e}",
             "is_error": True
         }
 
@@ -340,6 +445,65 @@ Be autonomous and thorough. Fix the issue completely."""
                 pass
 
 
+async def invoke_update_agent(repo_name: str, repo_config: Dict[str, Any]):
+    """Invoke Claude Agent to update a repository"""
+    log(f"🔄 Invoking Claude Agent to update {repo_name}...")
+    
+    # Prepare the prompt with update instructions
+    prompt = f"""The repository '{repo_name}' at {repo_config['path']} has new commits available.
+
+Please perform the following update procedure:
+
+1. Use check_git_updates tool to see what commits are available
+2. Navigate to the repository: cd {repo_config['path']}
+3. Stash any uncommitted changes: git stash save "auto-update-$(date +%Y%m%d-%H%M%S)"
+4. Pull the latest changes: git pull --rebase origin {repo_config.get('branch', 'main')}
+5. Check if package.json or pnpm-lock.yaml changed:
+   - If changed: Run the update commands to install dependencies
+   - If not changed: Skip dependency installation
+6. Run post-update commands: {', '.join(repo_config.get('post_update_commands', []))}
+7. Restart any required services: {', '.join(repo_config.get('restart_services', []))}
+8. Verify services are healthy after restart
+9. Send me a Telegram notification with:
+   - Repository name
+   - New commits that were pulled
+   - Whether dependencies were updated
+   - Services that were restarted
+   - Current status
+
+Be thorough and handle any errors gracefully. If something fails, report it in the Telegram notification."""
+    
+    try:
+        async for message in query(
+            prompt=prompt,
+            options=ClaudeAgentOptions(
+                allowed_tools=["Bash", "Read", "Edit", "Glob"],
+                custom_tools=[send_telegram_tool, check_git_updates_tool, get_service_info_tool],
+                cwd=str(Path(repo_config['path'])),
+            )
+        ):
+            if hasattr(message, "result"):
+                log(f"✅ Update agent completed: {message.result}")
+            elif hasattr(message, "text"):
+                log(f"💭 Update agent: {message.text[:100]}...")
+    
+    except Exception as e:
+        log(f"❌ Update agent error: {e}")
+        # Fallback notification
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            try:
+                import requests
+                requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": TELEGRAM_CHAT_ID,
+                        "text": f"⚠️ Failed to update {repo_name}: {e}"
+                    }
+                )
+            except:
+                pass
+
+
 async def monitor_loop():
     """Main monitoring loop"""
     log("🐕 F1re Claude Watchdog started")
@@ -382,7 +546,17 @@ async def monitor_loop():
     check_interval = CONFIG.get("check_interval", 30)
     max_simple_restarts = CONFIG.get("max_simple_restarts", 3)
     
+    # Repository update checking
+    repositories = CONFIG.get("repositories", {})
+    update_check_interval = CONFIG.get("update_check_interval", 14400)  # 4 hours default
+    last_update_check = 0
+    
+    if repositories:
+        log(f"🔄 Will check {len(repositories)} repositories for updates every {update_check_interval/3600:.1f} hours")
+    
+    loop_count = 0
     while True:
+        # Service health monitoring
         for service in services:
             if check_service_health(service):
                 # Service is healthy
@@ -407,6 +581,53 @@ async def monitor_loop():
                     restart_counts[service] = 0
                     await asyncio.sleep(300)  # Wait 5 minutes before trying again
         
+        # Check for repository updates periodically
+        current_time = time.time()
+        if repositories and (current_time - last_update_check) >= update_check_interval:
+            log("🔍 Checking repositories for updates...")
+            last_update_check = current_time
+            
+            for repo_name, repo_config in repositories.items():
+                try:
+                    # Quick check if updates are available
+                    repo_path = Path(repo_config['path'])
+                    if not repo_path.exists():
+                        log(f"⚠️ Repository {repo_name} path does not exist: {repo_path}")
+                        continue
+                    
+                    # Fetch to check for updates
+                    result = subprocess.run(
+                        ["git", "fetch", "origin"],
+                        cwd=repo_path,
+                        capture_output=True,
+                        timeout=30
+                    )
+                    
+                    # Check if local is behind remote
+                    local_commit = subprocess.run(
+                        ["git", "rev-parse", "HEAD"],
+                        cwd=repo_path,
+                        capture_output=True,
+                        text=True
+                    ).stdout.strip()
+                    
+                    remote_commit = subprocess.run(
+                        ["git", "rev-parse", f"origin/{repo_config.get('branch', 'main')}"],
+                        cwd=repo_path,
+                        capture_output=True,
+                        text=True
+                    ).stdout.strip()
+                    
+                    if local_commit != remote_commit:
+                        log(f"🆕 Updates available for {repo_name}, invoking AI agent...")
+                        await invoke_update_agent(repo_name, repo_config)
+                    else:
+                        log(f"✅ {repo_name} is up to date")
+                        
+                except Exception as e:
+                    log(f"❌ Error checking {repo_name} for updates: {e}")
+        
+        loop_count += 1
         await asyncio.sleep(check_interval)
 
 

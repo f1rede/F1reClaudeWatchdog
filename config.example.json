@@ -1,6 +1,7 @@
 {
   "check_interval": 30,
   "max_simple_restarts": 3,
+  "update_check_interval": 14400,
   "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
   "telegram_chat_id": "YOUR_CHAT_ID_HERE",
   "services": {
@@ -18,6 +19,17 @@
       "health_check_command": "curl -f http://localhost:8080/health",
       "restart_command": "~/scripts/restart-my-service.sh",
       "log_file": "/var/log/custom-service.log"
+    }
+  },
+  "repositories": {
+    "clawdbot": {
+      "path": "/Users/username/workspace/clawdbot",
+      "branch": "main",
+      "post_update_commands": [
+        "pnpm install",
+        "pnpm build"
+      ],
+      "restart_services": ["com.alexanderdeutsch.clawdbot.gateway-source"]
     }
   }
 }
