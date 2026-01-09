@@ -509,25 +509,42 @@ async def monitor_loop():
     log("🐕 F1re Claude Watchdog started")
     
     services = CONFIG.get("services", {})
-    if not services:
-        log("⚠️ No services configured. Add services to config.json")
+    repositories = CONFIG.get("repositories", {})
+    
+    if not services and not repositories:
+        log("⚠️ No services or repositories configured. Add to config.json")
         return
     
-    log(f"📋 Monitoring {len(services)} service(s): {', '.join(services.keys())}")
+    if services:
+        log(f"📋 Monitoring {len(services)} service(s): {', '.join(services.keys())}")
     
     # Send startup notification to Telegram
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         try:
             import requests
-            startup_message = f"""🐕 *F1re Claude Watchdog Started*
-
-📋 Monitoring {len(services)} service(s):
-{chr(10).join(f'  • {svc}' for svc in services.keys())}
-
-⏱ Check interval: {CONFIG.get('check_interval', 30)}s
-🔄 Max restarts: {CONFIG.get('max_simple_restarts', 3)}
-
-✅ Ready to keep your services healthy!"""
+            
+            # Build startup message
+            parts = ["🐕 *F1re Claude Watchdog Started*", ""]
+            
+            if services:
+                parts.append(f"📋 Monitoring {len(services)} service(s):")
+                parts.extend([f'  • {svc}' for svc in services.keys()])
+                parts.append("")
+                parts.append(f"⏱ Check interval: {CONFIG.get('check_interval', 30)}s")
+                parts.append(f"🔄 Max restarts: {CONFIG.get('max_simple_restarts', 3)}")
+            
+            if repositories:
+                if services:
+                    parts.append("")
+                parts.append(f"📦 Auto-updating {len(repositories)} repository(s):")
+                parts.extend([f'  • {repo}' for repo in repositories.keys()])
+                parts.append("")
+                parts.append(f"🔍 Update check: every {CONFIG.get('update_check_interval', 14400)/3600:.1f}h")
+            
+            parts.append("")
+            parts.append("✅ Ready!")
+            
+            startup_message = chr(10).join(parts)
             
             requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
