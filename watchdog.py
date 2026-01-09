@@ -351,6 +351,33 @@ async def monitor_loop():
     
     log(f"📋 Monitoring {len(services)} service(s): {', '.join(services.keys())}")
     
+    # Send startup notification to Telegram
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            import requests
+            startup_message = f"""🐕 *F1re Claude Watchdog Started*
+
+📋 Monitoring {len(services)} service(s):
+{chr(10).join(f'  • {svc}' for svc in services.keys())}
+
+⏱ Check interval: {CONFIG.get('check_interval', 30)}s
+🔄 Max restarts: {CONFIG.get('max_simple_restarts', 3)}
+
+✅ Ready to keep your services healthy!"""
+            
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": startup_message,
+                    "parse_mode": "Markdown"
+                },
+                timeout=5
+            )
+            log("📱 Sent startup notification to Telegram")
+        except Exception as e:
+            log(f"⚠️ Failed to send startup notification: {e}")
+    
     restart_counts = {service: 0 for service in services}
     check_interval = CONFIG.get("check_interval", 30)
     max_simple_restarts = CONFIG.get("max_simple_restarts", 3)
