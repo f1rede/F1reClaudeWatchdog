@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from claude_agent_sdk import query, ClaudeAgentOptions, tool
+from claude_agent_sdk import query, ClaudeAgentOptions, tool, create_sdk_mcp_server
 
 # Configuration - can be overridden via config.json
 DEFAULT_CONFIG = {
@@ -414,12 +414,18 @@ Use the available tools to:
 
 Be autonomous and thorough. Fix the issue completely."""
     
+    # Create MCP server with custom tools
+    mcp_server = create_sdk_mcp_server(
+        name="watchdog_tools",
+        tools=[send_telegram_tool, get_service_info_tool]
+    )
+    
     try:
         async for message in query(
             prompt=prompt,
             options=ClaudeAgentOptions(
                 allowed_tools=["Bash", "Read", "Edit", "Glob"],
-                custom_tools=[send_telegram_tool, get_service_info_tool],
+                mcp_servers={"watchdog": mcp_server},
                 cwd=str(Path.home()),
             )
         ):
@@ -473,12 +479,18 @@ Please perform the following update procedure:
 
 Be thorough and handle any errors gracefully. If something fails, report it in the Telegram notification."""
     
+    # Create MCP server with custom tools
+    mcp_server = create_sdk_mcp_server(
+        name="update_tools",
+        tools=[send_telegram_tool, check_git_updates_tool, get_service_info_tool]
+    )
+    
     try:
         async for message in query(
             prompt=prompt,
             options=ClaudeAgentOptions(
                 allowed_tools=["Bash", "Read", "Edit", "Glob"],
-                custom_tools=[send_telegram_tool, check_git_updates_tool, get_service_info_tool],
+                mcp_servers={"update": mcp_server},
                 cwd=str(Path(repo_config['path'])),
             )
         ):
