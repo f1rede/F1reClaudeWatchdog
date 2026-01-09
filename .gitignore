@@ -1,0 +1,28 @@
+# Configuration with secrets
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+.claude-watchdog/
+
+# OS
+.DS_Store
+Thumbs.db
