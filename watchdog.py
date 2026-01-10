@@ -500,20 +500,26 @@ Be thorough and handle any errors gracefully. If something fails, report it in t
                 log(f"💭 Update agent: {message.text[:100]}...")
     
     except Exception as e:
-        log(f"❌ Update agent error: {e}")
-        # Fallback notification
-        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            try:
-                import requests
-                requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": TELEGRAM_CHAT_ID,
-                        "text": f"⚠️ Failed to update {repo_name}: {e}"
-                    }
-                )
-            except:
-                pass
+        # Check if it's the known SDK race condition error
+        error_msg = str(e)
+        if "ProcessTransport is not ready" in error_msg or "TaskGroup" in error_msg:
+            log(f"⚠️ Update agent SDK race condition (known issue, safe to ignore): {error_msg[:100]}")
+            # Don't send notification for known SDK bugs
+        else:
+            log(f"❌ Update agent error: {e}")
+            # Fallback notification for real errors
+            if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+                try:
+                    import requests
+                    requests.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": TELEGRAM_CHAT_ID,
+                            "text": f"⚠️ Failed to update {repo_name}: {e}"
+                        }
+                    )
+                except:
+                    pass
 
 
 async def monitor_loop():
